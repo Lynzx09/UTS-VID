@@ -91,7 +91,7 @@ def main():
     st.markdown("---")
 
     # Tabs
-    tab_overview, tab_product = st.tabs(["🧭 Overview", "🛒 Product"])
+    tab_overview, tab_product = st.tabs(["🧭 Campaign Performance", "🛒 Product"])
 
     # ============ OVERVIEW ============
     with tab_overview:
