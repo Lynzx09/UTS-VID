@@ -1,5 +1,7 @@
-# streamlitVID.py — Year (global), Category per Tab, Product bar chart if >1 category
-# run: streamlit run streamlitVID.py
+# streamlitVID.py — Hilangkan Category(Product), semua kategori otomatis
+# Tab 1: Overview (KPI + Category table + Combo chart)
+# Tab 2: Product (tanpa Category filter, dengan Product filter & bar chart bawah)
+# jalankan: streamlit run streamlitVID.py
 
 import streamlit as st
 import pandas as pd
@@ -79,25 +81,26 @@ def main():
     df = load_data_any(BASE_DIR)
 
     # ======= TOP FILTER BAR (Year only) =======
-    fb1, fb_spacer = st.columns([1, 3], gap="large")
+    fb1, _ = st.columns([1, 3], gap="large")
     with fb1:
         years = sorted([int(y) for y in df["order_date"].dt.year.dropna().unique()])
         year = st.selectbox("Year", options=["All"]+years,
                             index=(years.index(2022)+1 if 2022 in years else 0))
-    # Apply year filter (global)
+
+    # Apply year filter
     dff_year = df if year == "All" else df[df["order_date"].dt.year == int(year)]
     selected_year = None if year=="All" else int(year)
 
     st.markdown("---")
 
     # Tabs
-    tab_overview, tab_product = st.tabs(["🧭 Campaign Performance", "🛒 Product"])
+    tab_overview, tab_product = st.tabs(["🧭 Campaign Overview", "🛒 Product"])
 
     # ============ OVERVIEW ============
     with tab_overview:
-        # Page-level Category (single dropdown)
+        # Category filter (local per tab)
         cat_opts = ["All"] + sorted(dff_year["category"].astype(str).dropna().unique().tolist())
-        sel_cat_over = st.selectbox("Category (Overview)", options=cat_opts, index=0)
+        sel_cat_over = st.selectbox("Category (Product Overview)", options=cat_opts, index=0)
         dff_over = dff_year if sel_cat_over=="All" else dff_year[dff_year["category"].astype(str)==sel_cat_over]
 
         # KPI row
@@ -149,11 +152,8 @@ def main():
 
     # ============ PRODUCT ============
     with tab_product:
-        # Page-level Category (multiselect)
-        cat_list = sorted(dff_year["category"].astype(str).dropna().unique().tolist())
-        sel_cat_prod = st.multiselect("Category (Product)", options=cat_list, default=cat_list)
-
-        dff_prod_base = dff_year[dff_year["category"].astype(str).isin(sel_cat_prod)] if sel_cat_prod else dff_year
+        # 🚫 Category filter dihapus total — semua kategori tampil otomatis
+        dff_prod_base = dff_year.copy()
 
         # Product filter (multiselect; empty => all)
         prod_label = build_product_label(dff_prod_base)
@@ -204,8 +204,7 @@ def main():
 
             st.markdown("---")
 
-            # ===== Horizontal bar jika kategori > 1 =====
-            # User pilih metrik yang mau dilihat
+            # Bar chart per kategori (selalu aktif sekarang)
             metric = st.radio("Metric untuk chart kategori", ["Revenue","Orders","Quantity"],
                               horizontal=True, index=0, key="cat_metric")
             agg_map = {
@@ -215,24 +214,17 @@ def main():
             }
             col_name, how = agg_map[metric]
 
-            # Ambil subset kategori yang aktif (dari sel_cat_prod)
-            active_cats = sel_cat_prod if sel_cat_prod else cat_list
-            cat_subset = view[view["category"].astype(str).isin(active_cats)]
-
-            # Jika lebih dari satu kategori -> tampilkan bar chart horizontal
-            if len(set(cat_subset["category"].astype(str))) > 1:
-                cat_agg = (cat_subset.groupby("category", dropna=False)
-                                      .agg(val=(col_name, how))
-                                      .reset_index()
-                                      .sort_values("val", ascending=True))
+            cat_agg = (view.groupby("category", dropna=False)
+                              .agg(val=(col_name, how))
+                              .reset_index()
+                              .sort_values("val", ascending=True))
+            if len(cat_agg)>1:
                 fig_bar = go.Figure()
-                fig_bar.add_bar(y=cat_agg["category"], x=cat_agg["val"], orientation="h",
-                                name=metric)
+                fig_bar.add_bar(y=cat_agg["category"], x=cat_agg["val"],
+                                orientation="h", name=metric)
                 fig_bar.update_layout(height=420, margin=dict(l=10,r=10,t=30,b=10),
                                       xaxis_title=metric, yaxis_title="Category")
                 st.plotly_chart(fig_bar, use_container_width=True)
-            else:
-                st.caption("Tip: pilih lebih dari satu kategori untuk melihat perbandingan horizontal bar.")
 
 if __name__ == "__main__":
     main()
