@@ -1,7 +1,5 @@
-# streamlitVID.py — Hilangkan Category(Product), semua kategori otomatis
-# Tab 1: Overview (KPI + Category table + Combo chart)
-# Tab 2: Product (tanpa Category filter, dengan Product filter & bar chart bawah)
-# jalankan: streamlit run streamlitVID.py
+# streamlitVID.py — Product tab: Payment filter moved below product, always visible
+# Menampilkan pesan "Tidak ada data penjualan" jika data kosong
 
 import streamlit as st
 import pandas as pd
@@ -80,14 +78,14 @@ def main():
     BASE_DIR = Path(__file__).resolve().parent
     df = load_data_any(BASE_DIR)
 
-    # ======= TOP FILTER BAR (Year only) =======
+    # ======= FILTER ATAS (Year only) =======
     fb1, _ = st.columns([1, 3], gap="large")
     with fb1:
         years = sorted([int(y) for y in df["order_date"].dt.year.dropna().unique()])
         year = st.selectbox("Year", options=["All"]+years,
                             index=(years.index(2022)+1 if 2022 in years else 0))
 
-    # Apply year filter
+    # Filter tahun
     dff_year = df if year == "All" else df[df["order_date"].dt.year == int(year)]
     selected_year = None if year=="All" else int(year)
 
@@ -98,12 +96,11 @@ def main():
 
     # ============ OVERVIEW ============
     with tab_overview:
-        # Category filter (local per tab)
         cat_opts = ["All"] + sorted(dff_year["category"].astype(str).dropna().unique().tolist())
         sel_cat_over = st.selectbox("Category (Product Overview)", options=cat_opts, index=0)
         dff_over = dff_year if sel_cat_over=="All" else dff_year[dff_year["category"].astype(str)==sel_cat_over]
 
-        # KPI row
+        # KPI
         total_revenue = float(dff_over["revenue"].sum()) if not dff_over.empty else 0.0
         total_profit  = float(dff_over["profit"].sum())  if not dff_over.empty else 0.0
         orders        = int(dff_over["id"].nunique())    if not dff_over.empty else 0
@@ -114,11 +111,11 @@ def main():
         c3.metric("AOV", f"{aov_val:,.0f}")
         c4.metric("Orders", f"{orders:,}")
 
-        # Category Summary (Top 8)
+        # Category Table
         st.subheader("Category Summary (Top 8)")
         cat_tbl = category_top_table(dff_over)
         if cat_tbl.empty:
-            st.info("Tidak ada data kategori untuk filter saat ini.")
+            st.warning("Tidak ada data penjualan untuk kategori ini.")
         else:
             show = cat_tbl.rename(columns={
                 "category":"Category","revenue":"Values Sales",
@@ -130,11 +127,11 @@ def main():
 
         st.markdown("---")
 
-        # Combo chart: Values Sales vs Net Profit + AOV
+        # Combo Chart
         st.subheader("Values Sales vs Net Profit and AOV (Monthly)")
         m = monthly_agg(dff_over, selected_year)
         if m.empty:
-            st.info("Tidak ada data bulanan.")
+            st.warning("Tidak ada data penjualan untuk periode ini.")
         else:
             fig = go.Figure()
             fig.add_bar(x=m["month"], y=m["revenue"], name="Values Sales")
@@ -152,13 +149,12 @@ def main():
 
     # ============ PRODUCT ============
     with tab_product:
-        # 🚫 Category filter dihapus total — semua kategori tampil otomatis
         dff_prod_base = dff_year.copy()
 
-        # Product filter (multiselect; empty => all)
+        # Filter produk
         prod_label = build_product_label(dff_prod_base)
         if prod_label is None:
-            st.info("Kolom produk tidak ditemukan (product_name/sku/product_id/brand+model, dll).")
+            st.info("Kolom produk tidak ditemukan.")
             return
         dff_prod_base = dff_prod_base.assign(_product_label=prod_label)
 
@@ -169,13 +165,26 @@ def main():
         prod_options = ranked["_product_label"].astype(str).tolist()
         sel_products = st.multiselect("Pilih Produk (kosongkan untuk semua)", options=prod_options, default=[])
 
-        view = dff_prod_base if len(sel_products)==0 else dff_prod_base[dff_prod_base["_product_label"].isin(sel_products)]
+        # Filter metode pembayaran (selalu muncul)
+        all_pays = sorted(dff_prod_base["payment_method"].astype(str).dropna().unique().tolist())
+        sel_pays = st.multiselect("Filter Metode Pembayaran", options=all_pays, default=all_pays)
 
-        # KPIs
-        rev = float(view["revenue"].sum()) if not view.empty else 0.0
-        ords= int(view["id"].nunique()) if not view.empty else 0
-        qty = int(view["qty_ordered"].sum()) if not view.empty else 0
-        cus = int(view["customer_id"].nunique()) if not view.empty else 0
+        # Terapkan filter produk & pembayaran
+        view = dff_prod_base.copy()
+        if len(sel_products) > 0:
+            view = view[view["_product_label"].isin(sel_products)]
+        if len(sel_pays) > 0:
+            view = view[view["payment_method"].astype(str).isin(sel_pays)]
+
+        if view.empty:
+            st.warning("Tidak ada data penjualan untuk kombinasi filter ini.")
+            return
+
+        # KPI
+        rev = float(view["revenue"].sum())
+        ords= int(view["id"].nunique())
+        qty = int(view["qty_ordered"].sum())
+        cus = int(view["customer_id"].nunique())
         k1,k2,k3,k4 = st.columns(4)
         k1.metric("Revenue", f"{rev:,.0f}")
         k2.metric("Orders", f"{ords:,}")
@@ -183,48 +192,47 @@ def main():
         k4.metric("Customers", f"{cus:,}")
 
         # Payment pie + table
-        if view.empty:
-            st.info("Tidak ada data untuk kombinasi filter ini.")
+        pay = (view.groupby("payment_method", dropna=False)
+                 .agg(revenue=("revenue","sum"), orders=("id","nunique"))
+                 .reset_index()
+                 .sort_values("revenue", ascending=False))
+        colL, colR = st.columns([1.2,1.8], gap="large")
+        with colL:
+            st.markdown("**Payment Methods — Pie (by Revenue)**")
+            fig_pie = go.Figure(data=[go.Pie(labels=pay["payment_method"],
+                                             values=pay["revenue"], hole=.45)])
+            fig_pie.update_layout(height=420, margin=dict(l=10,r=10,t=30,b=10))
+            st.plotly_chart(fig_pie, use_container_width=True)
+        with colR:
+            tbl = pay.rename(columns={"payment_method":"Payment Method"})
+            tbl["revenue"] = tbl["revenue"].apply(lambda x: f"{x:,.0f}")
+            st.dataframe(tbl, use_container_width=True, height=420)
+
+        st.markdown("---")
+
+        # Bar chart kategori
+        metric = st.radio("Metric untuk chart kategori", ["Revenue","Orders","Quantity"],
+                          horizontal=True, index=0, key="cat_metric")
+        agg_map = {
+            "Revenue": ("revenue","sum"),
+            "Orders" : ("id","nunique"),
+            "Quantity": ("qty_ordered","sum"),
+        }
+        col_name, how = agg_map[metric]
+
+        cat_agg = (view.groupby("category", dropna=False)
+                          .agg(val=(col_name, how))
+                          .reset_index()
+                          .sort_values("val", ascending=True))
+        if len(cat_agg)>1:
+            fig_bar = go.Figure()
+            fig_bar.add_bar(y=cat_agg["category"], x=cat_agg["val"],
+                            orientation="h", name=metric)
+            fig_bar.update_layout(height=420, margin=dict(l=10,r=10,t=30,b=10),
+                                  xaxis_title=metric, yaxis_title="Category")
+            st.plotly_chart(fig_bar, use_container_width=True)
         else:
-            pay = (view.groupby("payment_method", dropna=False)
-                     .agg(revenue=("revenue","sum"), orders=("id","nunique"))
-                     .reset_index()
-                     .sort_values("revenue", ascending=False))
-            colL, colR = st.columns([1.2,1.8], gap="large")
-            with colL:
-                st.markdown("**Payment Methods — Pie (by Revenue)**")
-                fig_pie = go.Figure(data=[go.Pie(labels=pay["payment_method"],
-                                                 values=pay["revenue"], hole=.45)])
-                fig_pie.update_layout(height=420, margin=dict(l=10,r=10,t=30,b=10))
-                st.plotly_chart(fig_pie, use_container_width=True)
-            with colR:
-                tbl = pay.rename(columns={"payment_method":"Payment Method"})
-                tbl["revenue"] = tbl["revenue"].apply(lambda x: f"{x:,.0f}")
-                st.dataframe(tbl, use_container_width=True, height=420)
-
-            st.markdown("---")
-
-            # Bar chart per kategori (selalu aktif sekarang)
-            metric = st.radio("Metric untuk chart kategori", ["Revenue","Orders","Quantity"],
-                              horizontal=True, index=0, key="cat_metric")
-            agg_map = {
-                "Revenue": ("revenue","sum"),
-                "Orders" : ("id","nunique"),
-                "Quantity": ("qty_ordered","sum"),
-            }
-            col_name, how = agg_map[metric]
-
-            cat_agg = (view.groupby("category", dropna=False)
-                              .agg(val=(col_name, how))
-                              .reset_index()
-                              .sort_values("val", ascending=True))
-            if len(cat_agg)>1:
-                fig_bar = go.Figure()
-                fig_bar.add_bar(y=cat_agg["category"], x=cat_agg["val"],
-                                orientation="h", name=metric)
-                fig_bar.update_layout(height=420, margin=dict(l=10,r=10,t=30,b=10),
-                                      xaxis_title=metric, yaxis_title="Category")
-                st.plotly_chart(fig_bar, use_container_width=True)
+            st.caption("Tidak cukup kategori untuk membuat perbandingan.")
 
 if __name__ == "__main__":
     main()
